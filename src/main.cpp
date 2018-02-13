@@ -63,20 +63,27 @@ void mqttCallback(char *topic, byte *payload, unsigned int length) {
   PRINT(topic);
   PRINTLN("' topic.");
 
-  String payloadString = String((char *)payload);
+  if (strcmp(topic, MQTT_TOPIC_SET) != 0) {
+    PRINT("MQTT: Warning: Unknown topic: ");
+    PRINTLN(topic);
+  }
+  String payloadString        = String((char *)payload);
+  DoorState deservedDoorState = inProgress;
 
-  // parse the JSON
-  const size_t bufferSize = JSON_OBJECT_SIZE(1) + JSON_OBJECT_SIZE(8) + 130;
-  DynamicJsonBuffer jsonBuffer(bufferSize);
-  JsonObject& root   = jsonBuffer.parseObject(payload);
-  JsonObject& status = root.get<JsonObject&>("status");
+  if (payloadString.equals("0")) {
+    deservedDoorState = DoorState::closed;
+  } else if (payloadString.equals("1")) {
+    deservedDoorState = DoorState::opened;
+  } else {
+    // we assume JSON, so let's parse it
+    const size_t bufferSize = JSON_OBJECT_SIZE(1) + JSON_OBJECT_SIZE(8) + 130;
+    DynamicJsonBuffer jsonBuffer(bufferSize);
+    JsonObject& root   = jsonBuffer.parseObject(payload);
+    JsonObject& status = root.get<JsonObject&>("status");
 
-  if (strcmp(topic, MQTT_TOPIC_SET) == 0) {
     const char *doorStateChar = status.get<const char *>("doorState");
 
     if (doorStateChar) {
-      DoorState deservedDoorState = inProgress;
-
       if (strcasecmp(doorStateChar, "opened") == 0) {
         deservedDoorState = DoorState::opened;
       } else if (strcasecmp(doorStateChar, "closed") == 0) {
@@ -89,20 +96,17 @@ void mqttCallback(char *topic, byte *payload, unsigned int length) {
         PRINTLN_E("'.'");
         return;
       }
-
-      if (deservedDoorState == getDoorState()) {
-        PRINTLN_W("DOOR: No need to change the door state as it is already set.");
-        return;
-      }
-      changeDoorState();
-
-      // force the status publish
-      lastStatusMsgSentAt = 0;
     }
+  }
+
+  if (deservedDoorState == getDoorState()) {
+    PRINTLN_W("DOOR: No need to change the door state as it is already set.");
     return;
   }
-  PRINT("MQTT: Warning: Unknown topic: ");
-  PRINTLN(topic);
+  changeDoorState();
+
+  // force the status publish
+  lastStatusMsgSentAt = 0;
 }
 
 void setup() {
