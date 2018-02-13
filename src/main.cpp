@@ -151,6 +151,7 @@ void publishStatus() {
 }
 
 void loop() {
+  wifiClient->reconnectIfNeeded();
   RemotePrint::instance()->handle();
   fotaClient->loop();
   mqttClient->loop();
