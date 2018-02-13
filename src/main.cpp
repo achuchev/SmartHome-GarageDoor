@@ -1,21 +1,22 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
-#include <SmartHomeWiFiManager.h>
+#include <ESPWifiClient.h>
 #include <MqttClient.h>
 #include <FotaClient.h>
 #include <RemotePrint.h>
 #include "settings.h"
-
-SmartHomeWiFiManager smartHomeWiFiManager;
-MqttClient *mqttClient   = NULL;
-FotaClient *fotaClient   = new FotaClient(DEVICE_NAME);
-long lastStatusMsgSentAt = 0;
 
 enum DoorState {
   opened,
   closed,
   inProgress
 };
+
+ESPWifiClient *wifiClient       = new ESPWifiClient(WIFI_SSID, WIFI_PASS);
+MqttClient    *mqttClient       = NULL;
+FotaClient    *fotaClient       = new FotaClient(DEVICE_NAME);
+long lastStatusMsgSentAt        = 0;
+DoorState lastReportedDoorState = DoorState::inProgress;
 
 void changeDoorState() {
   PRINTLN("DOOR: Sending impulse to the relay module.");
@@ -38,7 +39,9 @@ DoorState getDoorState() {
   if (isDoorOpened()) {
     PRINTLN_D("OPENED'.");
     return DoorState::opened;
-  } else {
+  }
+
+  if (isDoorClosed()) {
     PRINTLN_D("CLOSED'.");
     return DoorState::closed;
   }
@@ -108,7 +111,7 @@ void setup() {
   pinMode(PIN_SENSOR_OPENED, INPUT_PULLUP);
   pinMode(PIN_SENSOR_CLOSED, INPUT_PULLUP);
 
-  smartHomeWiFiManager.init(WIFI_AP_SSID, WIFI_AP_PASSWORD);
+  wifiClient->init();
   mqttClient = new MqttClient(MQTT_SERVER,
                               MQTT_SERVER_PORT,
                               DEVICE_NAME,
@@ -124,12 +127,12 @@ void publishStatus() {
   long now             = millis();
   long publishInterval = MQTT_PUBLISH_STATUS_INTERVAL;
 
-  if (getDoorState() == DoorState::inProgress) {
+  if (lastReportedDoorState == DoorState::inProgress) {
     // Use reduced interval in case the door is in progress
     publishInterval = MQTT_PUBLISH_STATUS_REDUCED_INTERVAL;
   }
 
-  if (now - lastStatusMsgSentAt < MQTT_PUBLISH_STATUS_INTERVAL) {
+  if (now - lastStatusMsgSentAt < publishInterval) {
     // Not yet
     return;
   }
@@ -140,7 +143,8 @@ void publishStatus() {
   JsonObject& root   = jsonBuffer.createObject();
   JsonObject& status = root.createNestedObject("status");
 
-  status["doorState"] = getDoorStateAsChar();
+  lastReportedDoorState = getDoorState();
+  status["doorState"]   = getDoorStateAsChar();
 
   // convert to String
   String outString;
@@ -151,7 +155,6 @@ void publishStatus() {
 }
 
 void loop() {
-  smartHomeWiFiManager.reconnectIfNeeded();
   RemotePrint::instance()->handle();
   fotaClient->loop();
   mqttClient->loop();
