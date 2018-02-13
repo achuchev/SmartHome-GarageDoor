@@ -1,15 +1,21 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include <SmartHomeWiFiManager.h>
 #include <MqttClient.h>
 #include <FotaClient.h>
-#include <ESPWifiClient.h>
 #include <RemotePrint.h>
 #include "settings.h"
 
-MqttClient *mqttClient    = NULL;
-FotaClient *fotaClient    = new FotaClient(DEVICE_NAME);
-ESPWifiClient *wifiClient = new ESPWifiClient(WIFI_SSID, WIFI_PASS);
-long lastStatusMsgSentAt  = 0;
+SmartHomeWiFiManager smartHomeWiFiManager;
+MqttClient *mqttClient   = NULL;
+FotaClient *fotaClient   = new FotaClient(DEVICE_NAME);
+long lastStatusMsgSentAt = 0;
+
+enum DoorState {
+  opened,
+  closed,
+  inProgress
+};
 
 void changeDoorState() {
   PRINTLN("DOOR: Sending impulse to the relay module.");
@@ -18,18 +24,35 @@ void changeDoorState() {
   digitalWrite(PIN_RELAY, LOW);
 }
 
-bool isOpened() {
-  bool isOpen = digitalRead(PIN_SENSOR) == LOW;
+bool isDoorOpened() {
+  return digitalRead(PIN_SENSOR_OPENED) == LOW;
+}
 
+bool isDoorClosed() {
+  return digitalRead(PIN_SENSOR_CLOSED) == LOW;
+}
+
+DoorState getDoorState() {
   PRINT_D("DOOR: State is '");
 
-  if (isOpen) {
-    PRINT_D("OPENED");
+  if (isDoorOpened()) {
+    PRINTLN_D("OPENED'.");
+    return DoorState::opened;
   } else {
-    PRINT_D("CLOSED");
+    PRINTLN_D("CLOSED'.");
+    return DoorState::closed;
   }
-  PRINTLN_D("'.");
-  return isOpen;
+  PRINTLN_D("IN PROGRESS'.");
+  return DoorState::inProgress;
+}
+
+const char* getDoorStateAsChar() {
+  switch (getDoorState()) {
+    case DoorState::opened: return "opened";
+    case DoorState::closed: return "closed";
+    case DoorState::inProgress: return "inProgress";
+    default: { PRINTLN_E("DOOR: Unknow door state."); return "error"; }
+  }
 }
 
 void mqttCallback(char *topic, byte *payload, unsigned int length) {
@@ -46,23 +69,32 @@ void mqttCallback(char *topic, byte *payload, unsigned int length) {
   JsonObject& status = root.get<JsonObject&>("status");
 
   if (strcmp(topic, MQTT_TOPIC_SET) == 0) {
-    const char *isOpenedChar = status.get<const char *>("isOpened");
+    const char *doorStateChar = status.get<const char *>("doorState");
 
-    if (isOpenedChar) {
-      bool isOpenedDeserved = false;
+    if (doorStateChar) {
+      DoorState deservedDoorState = inProgress;
 
-      if (strcasecmp(isOpenedChar, "true") == 0) {
-        isOpenedDeserved = true;
-      }
-
-      if (isOpenedDeserved != isOpened()) {
-        changeDoorState();
-
-        // force the status publish
-        lastStatusMsgSentAt = 0;
+      if (strcasecmp(doorStateChar, "opened") == 0) {
+        deservedDoorState = DoorState::opened;
+      } else if (strcasecmp(doorStateChar, "closed") == 0) {
+        deservedDoorState = DoorState::closed;
+      } else if (strcasecmp(doorStateChar, "inProgress") == 0) {
+        deservedDoorState = DoorState::inProgress;
       } else {
-        PRINTLN("DOOR: No need to change the door state as it is already set.");
+        PRINT_E("DOOR: Unknown door state '");
+        PRINT_E(doorStateChar);
+        PRINTLN_E("'.'");
+        return;
       }
+
+      if (deservedDoorState == getDoorState()) {
+        PRINTLN_W("DOOR: No need to change the door state as it is already set.");
+        return;
+      }
+      changeDoorState();
+
+      // force the status publish
+      lastStatusMsgSentAt = 0;
     }
     return;
   }
@@ -73,9 +105,10 @@ void mqttCallback(char *topic, byte *payload, unsigned int length) {
 void setup() {
   pinMode(PIN_RELAY, OUTPUT);
   digitalWrite(PIN_RELAY, LOW);
-  pinMode(PIN_SENSOR, INPUT_PULLUP);
+  pinMode(PIN_SENSOR_OPENED, INPUT_PULLUP);
+  pinMode(PIN_SENSOR_CLOSED, INPUT_PULLUP);
 
-  wifiClient->init();
+  smartHomeWiFiManager.init(WIFI_AP_SSID, WIFI_AP_PASSWORD);
   mqttClient = new MqttClient(MQTT_SERVER,
                               MQTT_SERVER_PORT,
                               DEVICE_NAME,
@@ -88,9 +121,16 @@ void setup() {
 }
 
 void publishStatus() {
-  long now = millis();
+  long now             = millis();
+  long publishInterval = MQTT_PUBLISH_STATUS_INTERVAL;
+
+  if (getDoorState() == DoorState::inProgress) {
+    // Use reduced interval in case the door is in progress
+    publishInterval = MQTT_PUBLISH_STATUS_REDUCED_INTERVAL;
+  }
 
   if (now - lastStatusMsgSentAt < MQTT_PUBLISH_STATUS_INTERVAL) {
+    // Not yet
     return;
   }
   lastStatusMsgSentAt = now;
@@ -100,7 +140,7 @@ void publishStatus() {
   JsonObject& root   = jsonBuffer.createObject();
   JsonObject& status = root.createNestedObject("status");
 
-  status["isOpened"] = isOpened();
+  status["doorState"] = getDoorStateAsChar();
 
   // convert to String
   String outString;
@@ -111,6 +151,7 @@ void publishStatus() {
 }
 
 void loop() {
+  smartHomeWiFiManager.reconnectIfNeeded();
   RemotePrint::instance()->handle();
   fotaClient->loop();
   mqttClient->loop();
