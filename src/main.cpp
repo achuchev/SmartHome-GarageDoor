@@ -49,8 +49,8 @@ DoorState getDoorState() {
   return DoorState::inProgress;
 }
 
-const char* getDoorStateAsChar() {
-  switch (getDoorState()) {
+const char* getDoorStateAsChar(DoorState doorState) {
+  switch (doorState) {
     case DoorState::opened: return "opened";
     case DoorState::closed: return "closed";
     case DoorState::inProgress: return "inProgress";
@@ -124,15 +124,11 @@ void setup() {
 }
 
 void publishStatus() {
-  long now             = millis();
-  long publishInterval = MQTT_PUBLISH_STATUS_INTERVAL;
+  long now                   = millis();
+  DoorState currentDoorState = getDoorState();
 
-  if (lastReportedDoorState == DoorState::inProgress) {
-    // Use reduced interval in case the door is in progress
-    publishInterval = MQTT_PUBLISH_STATUS_REDUCED_INTERVAL;
-  }
-
-  if (now - lastStatusMsgSentAt < publishInterval) {
+  if ((lastReportedDoorState == currentDoorState) &&
+      (now - lastStatusMsgSentAt < MQTT_PUBLISH_STATUS_INTERVAL)) {
     // Not yet
     return;
   }
@@ -143,8 +139,8 @@ void publishStatus() {
   JsonObject& root   = jsonBuffer.createObject();
   JsonObject& status = root.createNestedObject("status");
 
-  lastReportedDoorState = getDoorState();
-  status["doorState"]   = getDoorStateAsChar();
+  lastReportedDoorState = currentDoorState;
+  status["doorState"]   = getDoorStateAsChar(currentDoorState);
 
   // convert to String
   String outString;
