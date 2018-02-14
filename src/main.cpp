@@ -70,16 +70,28 @@ void mqttCallback(char *topic, byte *payload, unsigned int length) {
   String payloadString        = String((char *)payload);
   DoorState deservedDoorState = inProgress;
 
-  if (payloadString.equals("0")) {
+  if (payloadString.equalsIgnoreCase("close")) {
     deservedDoorState = DoorState::closed;
-  } else if (payloadString.equals("1")) {
+  } else if (payloadString.equalsIgnoreCase("open")) {
     deservedDoorState = DoorState::opened;
   } else {
     // we assume JSON, so let's parse it
     const size_t bufferSize = JSON_OBJECT_SIZE(1) + JSON_OBJECT_SIZE(8) + 130;
     DynamicJsonBuffer jsonBuffer(bufferSize);
-    JsonObject& root   = jsonBuffer.parseObject(payload);
+    JsonObject& root = jsonBuffer.parseObject(payload);
+
+    if (!root.success()) {
+      PRINTLN_E("DOOR: JSON with \"root\" key not received.");
+      PRINTLN_E(payloadString);
+      return;
+    }
     JsonObject& status = root.get<JsonObject&>("status");
+
+    if (!status.success()) {
+      PRINTLN_E("DOOR: JSON with \"status\" key not received.");
+      PRINTLN_E(payloadString);
+      return;
+    }
 
     const char *doorStateChar = status.get<const char *>("doorState");
 
