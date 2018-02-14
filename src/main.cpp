@@ -67,16 +67,26 @@ void mqttCallback(char *topic, byte *payload, unsigned int length) {
     PRINT("MQTT: Warning: Unknown topic: ");
     PRINTLN(topic);
   }
-  String payloadString        = String((char *)payload);
+
+  // Convert the payload to string
+  char spayload[length + 1];
+  memcpy(spayload, payload, length);
+  spayload[length] = '\0';
+  String payloadString = String(spayload);
+
   DoorState deservedDoorState = inProgress;
 
-  if (payloadString.equalsIgnoreCase("close")) {
+  if (payloadString.equalsIgnoreCase("close") ||
+      payloadString.equalsIgnoreCase("c") ||
+      payloadString.equalsIgnoreCase("0")) {
     deservedDoorState = DoorState::closed;
-  } else if (payloadString.equalsIgnoreCase("open")) {
+  } else if (payloadString.equalsIgnoreCase("open") ||
+             payloadString.equalsIgnoreCase("o") ||
+             payloadString.equalsIgnoreCase("1")) {
     deservedDoorState = DoorState::opened;
   } else {
     // we assume JSON, so let's parse it
-    const size_t bufferSize = JSON_OBJECT_SIZE(1) + JSON_OBJECT_SIZE(8) + 130;
+    const size_t bufferSize = 2 * JSON_OBJECT_SIZE(1) + 30;
     DynamicJsonBuffer jsonBuffer(bufferSize);
     JsonObject& root = jsonBuffer.parseObject(payload);
 
@@ -150,7 +160,7 @@ void publishStatus() {
   }
   lastStatusMsgSentAt = now;
 
-  const size_t bufferSize = JSON_ARRAY_SIZE(4) + 5 * JSON_OBJECT_SIZE(1);
+  const size_t bufferSize = 2 * JSON_OBJECT_SIZE(1);
   DynamicJsonBuffer jsonBuffer(bufferSize);
   JsonObject& root   = jsonBuffer.createObject();
   JsonObject& status = root.createNestedObject("status");
